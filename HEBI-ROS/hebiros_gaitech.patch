@@ -1,0 +1,241 @@
+
+diff --git a/example_nodes/src/arm_node/arm.cpp b/example_nodes/src/arm_node/arm.cpp
+index 43098a0..da18a7e 100644
+--- a/example_nodes/src/arm_node/arm.cpp
++++ b/example_nodes/src/arm_node/arm.cpp
+@@ -58,8 +58,10 @@ namespace hebi {
+       command_.setPosition(pos_);
+       command_.setVelocity(vel_);
+
+       // Add grav-comp efforts
+-      command_.setEffort(arm_kinematics_.gravCompEfforts(feedback_));
++      auto efforts = arm_kinematics_.gravCompEfforts(feedback_);
++      efforts[1] -= 9.8;
++      command_.setEffort(efforts);
+ 
+       // TODO: add dynamic-comp efforts
+ 
+diff --git a/example_nodes/src/arm_node/arm_node.cpp b/example_nodes/src/arm_node/arm_node.cpp
+index 1fd3282..182ec08 100644
+--- a/example_nodes/src/arm_node/arm_node.cpp
++++ b/example_nodes/src/arm_node/arm_node.cpp
+@@ -55,6 +55,10 @@ namespace hebi {
+ 
+         // These are the joint angles that will be added
+         Eigen::MatrixXd positions(arm_.size(), num_waypoints);
++        Eigen::MatrixXd velocities(arm_.size(), num_waypoints);
++        velocities.setZero();
++        Eigen::MatrixXd accelerations(arm_.size(), num_waypoints);
++        accelerations.setZero();
+ 
+         // Plan to each subsequent point from the last position
+         Eigen::VectorXd last_position = arm_.getLastFeedback().getPosition();
+@@ -77,7 +81,7 @@ namespace hebi {
+         arm_.getTrajectory().replan(
+           ::ros::Time::now().toSec(),
+           arm_.getLastFeedback(),
+-          positions);
++          positions, velocities, accelerations);
+       }
+ 
+     private:
+@@ -114,23 +118,27 @@ int main(int argc, char ** argv) {
+   using LinkType = hebi::robot_model::RobotModel::LinkType;
+ 
+   hebi::robot_model::RobotModel model;
+-  model.addActuator(ActuatorType::X5_9);
+-  model.addBracket(BracketType::X5HeavyLeftOutside );
+-  model.addActuator(ActuatorType::X5_9);
++  model.addActuator(ActuatorType::X8_9);
++  model.addBracket(BracketType::X5HeavyRightOutside );
++  model.addActuator(ActuatorType::X8_9);
+   model.addLink(LinkType::X5, 0.325, M_PI);
+   model.addActuator(ActuatorType::X5_9);
+   model.addLink(LinkType::X5, 0.325, M_PI);
+-  model.addActuator(ActuatorType::X5_4);
+-  model.addLink(LinkType::X5, 0.175, 0);
++  model.addActuator(ActuatorType::X5_1);
++  model.addBracket(BracketType::X5LightRight );
++  model.addActuator(ActuatorType::X5_1);
++  model.addBracket(BracketType::X5LightRight );
++  model.addActuator(ActuatorType::X5_1);
+   hebi::arm::ArmKinematics arm_kinematics(model);
+ 
+   Eigen::VectorXd home_position(model.getDoFCount());
+-  home_position << 0, -M_PI*2/5, -M_PI*4/5, -M_PI_2;
++  home_position << 0, 1.4, 2.0, 0, 0, 0;
+ 
+   // Create arm and plan initial trajectory
+   auto arm = hebi::arm::Arm::createArm(
+-    {"4-DoF Arm"},                          // Family
+-    {"Base", "Shoulder", "Elbow", "Wrist"}, // Names,
++    {"Arm"},                                // Family
++    {"Base", "Shoulder", "Elbow",
++     "Wrist1", "Wrist2", "Wrist3"},         // Names,
+     home_position,                          // Home position
+     arm_kinematics,                         // Kinematics object
+     ros::Time::now().toSec());              // Starting time (for trajectory)  
+diff --git a/hebiros/launch/hebiros.launch b/hebiros/launch/hebiros.launch
+index c5c6760..f4cad67 100644
+--- a/hebiros/launch/hebiros.launch
++++ b/hebiros/launch/hebiros.launch
+@@ -1,3 +1,5 @@
+ <launch>
++  <param name="robot_description" command="cat $(find hebiros_description)/urdf/A-2085-06.urdf"/>
++
+   <node name="hebiros_node" pkg="hebiros" type="hebiros_node" respawn="false" output="screen"/>
+ </launch>
+diff --git a/hebiros/launch/hebiros_gazebo.launch b/hebiros/launch/hebiros_gazebo.launch
+index 748b42a..e71ed0d 100644
+--- a/hebiros/launch/hebiros_gazebo.launch
++++ b/hebiros/launch/hebiros_gazebo.launch
+@@ -1,3 +1,5 @@
+ <launch>
++  <!--<param name="robot_description" command="cat $(find hebiros_description)/urdf/A-2085-06.urdf"/>-->
++
+   <node name="hebiros_node" pkg="hebiros" type="hebiros_node" args="-use_gazebo true" respawn="false" output="screen"/>
+ </launch>
+diff --git a/hebiros_basic_examples/src/example_01_lookup_node.cpp b/hebiros_basic_examples/src/example_01_lookup_node.cpp
+index 3d593a7..f377e80 100644
+--- a/hebiros_basic_examples/src/example_01_lookup_node.cpp
++++ b/hebiros_basic_examples/src/example_01_lookup_node.cpp
+@@ -37,8 +37,8 @@ int main(int argc, char **argv) {
+ 
+   //Construct a group using 3 known modules
+   add_group_srv.request.group_name = group_name;
+-  add_group_srv.request.names = {"base", "shoulder", "elbow"};
+-  add_group_srv.request.families = {"HEBI"};
++  add_group_srv.request.names = {"Base", "Shoulder", "Elbow", "Wrist1", "Wrist2", "Wrist3"};
++  add_group_srv.request.families = {"Arm"};
+   //Call the add_group_from_urdf service to create a group until it succeeds
+   //Specific topics and services will now be available under this group's namespace
+   while(!add_group_client.call(add_group_srv)) {}
+diff --git a/hebiros_basic_examples/src/example_02_feedback_node.cpp b/hebiros_basic_examples/src/example_02_feedback_node.cpp
+index d643be1..c6d4fd4 100644
+--- a/hebiros_basic_examples/src/example_02_feedback_node.cpp
++++ b/hebiros_basic_examples/src/example_02_feedback_node.cpp
+@@ -41,8 +41,8 @@ int main(int argc, char **argv) {
+ 
+   //Construct a group using 3 known modules
+   add_group_srv.request.group_name = group_name;
+-  add_group_srv.request.names = {"base", "shoulder", "elbow"};
+-  add_group_srv.request.families = {"HEBI"};
++  add_group_srv.request.names = {"Base", "Shoulder", "Elbow"};
++  add_group_srv.request.families = {"Arm"};
+   //Call the add_group_from_urdf service to create a group until it succeeds
+   //Specific topics and services will now be available under this group's namespace
+   while(!add_group_client.call(add_group_srv)) {}
+diff --git a/hebiros_basic_examples/src/example_03_command_node.cpp b/hebiros_basic_examples/src/example_03_command_node.cpp
+index ce72aa8..549fe08 100644
+--- a/hebiros_basic_examples/src/example_03_command_node.cpp
++++ b/hebiros_basic_examples/src/example_03_command_node.cpp
+@@ -39,8 +39,8 @@ int main(int argc, char **argv) {
+ 
+   //Construct a group using 3 known modules
+   add_group_srv.request.group_name = group_name;
+-  add_group_srv.request.names = {"base", "shoulder", "elbow"};
+-  add_group_srv.request.families = {"HEBI"};
++  add_group_srv.request.names = {"Base"};
++  add_group_srv.request.families = {"Arm"};
+   //Call the add_group_from_urdf service to create a group until it succeeds
+   //Specific topics and services will now be available under this group's namespace
+   while(!add_group_client.call(add_group_srv)) {}
+@@ -48,22 +48,16 @@ int main(int argc, char **argv) {
+   //Construct a JointState to command the modules
+   //This may potentially contain a name, position, velocity, and effort for each module
+   sensor_msgs::JointState command_msg;
+-  command_msg.name.push_back("HEBI/base");
+-  command_msg.name.push_back("HEBI/shoulder");
+-  command_msg.name.push_back("HEBI/elbow");
++  command_msg.name.push_back("Arm/Base");
+ 
+-  command_msg.effort.resize(3);
++  command_msg.position.resize(1);
+ 
+-  feedback.position.reserve(3);
+-
+-  double spring_constant = -10;
++  feedback.position.reserve(1);
+ 
+   while(ros::ok()) {
+ 
+     //Apply Hooke's Law: F = -k * x to all modules and publish as a command
+-    command_msg.effort[0] = spring_constant * feedback.position[0];
+-    command_msg.effort[1] = spring_constant * feedback.position[1];
+-    command_msg.effort[2] = spring_constant * feedback.position[2];
++    command_msg.position[0] = 0;
+     command_publisher.publish(command_msg);
+ 
+     ros::spinOnce();
+diff --git a/hebiros_basic_examples/src/example_04_trajectory_node.cpp b/hebiros_basic_examples/src/example_04_trajectory_node.cpp
+index 2d0ee30..9b3cb30 100644
+--- a/hebiros_basic_examples/src/example_04_trajectory_node.cpp
++++ b/hebiros_basic_examples/src/example_04_trajectory_node.cpp
+@@ -57,8 +57,8 @@ int main(int argc, char **argv) {
+   ros::Rate loop_rate(200);
+ 
+   std::string group_name = "my_group";
+-  int num_joints = 3;
+-  int num_waypoints = 5;
++  int num_joints = 6;
++  int num_waypoints = 3;
+ 
+   //Create a client which uses the service to create a group
+   ros::ServiceClient add_group_client = n.serviceClient<AddGroupFromNamesSrv>(
+@@ -73,13 +73,13 @@ int main(int argc, char **argv) {
+ 
+   //Construct a group using 3 known modules
+   add_group_srv.request.group_name = group_name;
+-  add_group_srv.request.names = {"base", "shoulder", "elbow"};
+-  add_group_srv.request.families = {"HEBI"};
++  add_group_srv.request.names = {"Base", "Shoulder", "Elbow", "Wrist1", "Wrist2", "Wrist3"};
++  add_group_srv.request.families = {"Arm"};
+   //Call the add_group_from_urdf service to create a group until it succeeds
+   //Specific topics and services will now be available under this group's namespace
+   while(!add_group_client.call(add_group_srv)) {}
+ 
+-  feedback.position.reserve(3);
++  feedback.position.reserve(6);
+ 
+   //Create an action client for executing a trajectory
+   actionlib::SimpleActionClient<TrajectoryAction> client("/hebiros/"+group_name+"/trajectory", true);
+@@ -99,19 +99,28 @@ int main(int argc, char **argv) {
+ 
+   double nan = std::numeric_limits<float>::quiet_NaN();
+   //Set the times to reach each waypoint in seconds
+-  std::vector<double> times = {0, 5, 10, 15, 20};
+-  std::vector<std::string> names = {"HEBI/base", "HEBI/shoulder", "HEBI/elbow"};
++  std::vector<double> times = {0, 2, 4};
++  std::vector<std::string> names = {"Arm/Base", "Arm/Shoulder", "Arm/Elbow", "Arm/Wrist1", "Arm/Wrist2", "Arm/Wrist3"};
+   //Set positions, velocities, and accelerations for each waypoint and each joint
+   //The following vectors have one joint per row and one waypoint per column
+-  std::vector<std::vector<double>> positions = {{feedback.position[0], 0, M_PI_2, 0,      0},
+-                                                {feedback.position[1], 0, M_PI_2, M_PI_2, 0},
+-                                                {feedback.position[2], 0, 0,      M_PI_2, 0}};
+-  std::vector<std::vector<double>> velocities = {{0, nan, nan, nan, 0},
+-                                                 {0, nan, nan, nan, 0},
+-                                                 {0, nan, nan, nan, 0}};
+-  std::vector<std::vector<double>> accelerations = {{0, nan, nan, nan, 0},
+-                                                    {0, nan, nan, nan, 0},
+-                                                    {0, nan, nan, nan, 0}};
++  std::vector<std::vector<double>> positions = {{0.2, -0.2, 0.2},
++                                                {-4.9, -4.9, -4.9},
++                                                {2.46, 2.46, 2.2},
++                                                {1.16, 1.16, 1.16},
++                                                {0.8, 0.8, 0},
++                                                {-6.8, -6.5, -4}};
++  std::vector<std::vector<double>> velocities = {{0, 0, 0},
++                                                 {0, 0, 0},
++                                                 {0, 0, 0},
++                                                 {0, 0, 0},
++                                                 {0, 0, 0},
++                                                 {0, 0, 0}};
++  std::vector<std::vector<double>> accelerations = {{0, 0, 0},
++                                                    {0, 0, 0},
++                                                    {0, 0, 0},
++                                                    {0, 0, 0},
++                                                    {0, 0, 0},
++                                                    {0, 0, 0}};
+ 
+   //Construct the goal using the TrajectoryGoal format
+   for (int i = 0; i < num_waypoints; i++) {
